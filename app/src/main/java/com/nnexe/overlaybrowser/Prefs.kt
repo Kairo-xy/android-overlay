@@ -41,6 +41,9 @@ class Prefs(context: Context) {
     var opacity: Float
         get() = sp.getFloat("opacity", 1f).coerceIn(MIN_OPACITY, 1f)
         set(v) = sp.edit().putFloat("opacity", v).apply()
+    var allowThirdPartyCookies: Boolean
+        get() = sp.getBoolean("third_party_cookies", false)
+        set(v) = sp.edit().putBoolean("third_party_cookies", v).apply()
     var desktopMode: Boolean
         get() = sp.getBoolean("desktop", false)
         set(v) = sp.edit().putBoolean("desktop", v).apply()
