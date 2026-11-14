@@ -10,8 +10,11 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -62,10 +65,44 @@ class MainActivity : Activity() {
 
         homeUrl.setText(prefs.homeUrl)
         findViewById<Button>(R.id.btn_save_home).setOnClickListener {
-            val url = Prefs.toUrl(homeUrl.text.toString()) ?: Prefs.DEFAULT_HOME
+            val url = Prefs.toUrl(homeUrl.text.toString(), prefs.searchEngine, prefs.customSearchUrl) ?: Prefs.DEFAULT_HOME
             prefs.homeUrl = url
             homeUrl.setText(url)
             Toast.makeText(this, R.string.home_saved, Toast.LENGTH_SHORT).show()
+        }
+
+        val searchEngine = findViewById<Spinner>(R.id.search_engine)
+        val engineNames = resources.getStringArray(R.array.search_engines)
+        searchEngine.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, engineNames).also {
+            it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        searchEngine.setSelection(engineNames.indexOf(prefs.searchEngine).coerceAtLeast(0), false)
+        val customSearchUrl = findViewById<EditText>(R.id.custom_search_url)
+        val saveCustomSearch = findViewById<Button>(R.id.btn_save_search)
+        customSearchUrl.setText(prefs.customSearchUrl)
+        fun updateCustomSearchVisibility() {
+            val isCustom = searchEngine.selectedItem?.toString() == Prefs.SEARCH_CUSTOM
+            customSearchUrl.visibility = if (isCustom) View.VISIBLE else View.GONE
+            saveCustomSearch.visibility = if (isCustom) View.VISIBLE else View.GONE
+        }
+        searchEngine.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                prefs.searchEngine = engineNames[position]
+                updateCustomSearchVisibility()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        updateCustomSearchVisibility()
+        saveCustomSearch.setOnClickListener {
+            val template = customSearchUrl.text.toString().trim()
+            if (!template.startsWith("https://") && !template.startsWith("http://")) {
+                Toast.makeText(this, R.string.search_template_invalid, Toast.LENGTH_SHORT).show()
+            } else if (!template.contains("{query}")) {
+                Toast.makeText(this, R.string.search_template_placeholder, Toast.LENGTH_SHORT).show()
+            } else {
+                prefs.customSearchUrl = template
+                Toast.makeText(this, R.string.search_engine_saved, Toast.LENGTH_SHORT).show()
+            }
         }
 
         val opacityValue = findViewById<TextView>(R.id.opacity_value)
