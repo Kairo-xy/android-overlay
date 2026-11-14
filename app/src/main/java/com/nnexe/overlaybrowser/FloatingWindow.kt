@@ -9,9 +9,12 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -21,14 +24,18 @@ import android.os.storage.StorageManager
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -68,6 +75,9 @@ import kotlin.math.sqrt
 /**
  * The floating browser: an overlay window with a toolbar and a WebView, plus the bubble it turns
  * into when minimized. [ctx] must be a themed context from the overlay service.
+ *
+ * View tree: `root` (transparent, padded for the shadow) > `card` (the visible window: rounded
+ * outline clip, fill, border, elevation) > toolbar / progress / WebView / resize handles.
  */
 @SuppressLint("ClickableViewAccessibility", "SetJavaScriptEnabled", "InflateParams")
 class FloatingWindow(
@@ -85,6 +95,7 @@ class FloatingWindow(
 
     private val density = ctx.resources.displayMetrics.density
     private fun dp(v: Int) = (v * density).roundToInt()
+    private fun dpf(v: Float) = (v * density).roundToInt()
     private val minWidth = dp(240)
     private val minHeight = dp(160)
     private val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop
@@ -94,6 +105,7 @@ class FloatingWindow(
     private val imm = ctx.getSystemService(InputMethodManager::class.java)
 
     private val root = LayoutInflater.from(ctx).inflate(R.layout.overlay_window, null) as OverlayRootView
+    private val card: FrameLayout = root.findViewById(R.id.card)
     private val toolbar: View = root.findViewById(R.id.toolbar)
     private val dragHandle: ImageView = root.findViewById(R.id.drag_handle)
     private val btnBack: ImageButton = root.findViewById(R.id.btn_back)
@@ -110,6 +122,7 @@ class FloatingWindow(
     private val webHolder: FreezableFrame = root.findViewById(R.id.web_holder)
     private val resizeLeft: View = root.findViewById(R.id.resize_bl)
     private val resizeRight: View = root.findViewById(R.id.resize_br)
+    private val resizeBottom: View = root.findViewById(R.id.resize_bottom)
 
     private val bubble = LayoutInflater.from(ctx).inflate(R.layout.overlay_bubble, null)
     private val bubbleIcon: View = bubble.findViewById(R.id.bubble_icon)
@@ -125,6 +138,13 @@ class FloatingWindow(
     /** Screen y of the keyboard's top edge while it's open over our window; 0 otherwise. */
     private var keyboardTop = 0
 
+    /** Window updates during a drag are batched to one per display frame instead of one per touch event. */
+    private var layoutScheduled = false
+    private val frameCallback = Choreographer.FrameCallback {
+        layoutScheduled = false
+        if (rootAdded) applyWindowLayout()
+    }
+
     private lateinit var webView: WebView
     private var mobileUserAgent = ""
     private var currentUrl = ""
@@ -132,6 +152,8 @@ class FloatingWindow(
     private var muted = prefs.muted
     var isMinimized = false
         private set
+    /** The fade-out before minimizing is running. */
+    private var minimizing = false
 
     /** True while the window holds keyboard focus (and so takes the gamepad from the app behind). */
     private var typing = false
@@ -171,9 +193,20 @@ class FloatingWindow(
         loadBounds()
         webView = createWebView()
         webHolder.addView(webView, matchParent())
+        // Clip the whole window (toolbar, page, handles) to a rounded outline; the radius is read live.
+        card.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                val r = min(cornerPx().toFloat(), min(view.width, view.height) / 2f)
+                outline.setRoundRect(0, 0, view.width, view.height, r)
+                // A see-through window should cast a lighter shadow.
+                outline.setAlpha(if (prefs.glass) 0.55f else 1f)
+            }
+        }
+        card.clipToOutline = true
         wireToolbar()
-        resizeLeft.setOnTouchListener(resizeListener(fromLeft = true))
-        resizeRight.setOnTouchListener(resizeListener(fromLeft = false))
+        resizeLeft.setOnTouchListener(resizeListener(Handle.LEFT))
+        resizeRight.setOnTouchListener(resizeListener(Handle.RIGHT))
+        resizeBottom.setOnTouchListener(resizeListener(Handle.BOTTOM))
         bubbleIcon.setOnTouchListener(bubbleListener())
         // Lets the EditText give up focus without focus jumping straight back into it.
         root.isFocusableInTouchMode = true
@@ -189,17 +222,19 @@ class FloatingWindow(
         }
         if (Build.VERSION.SDK_INT >= 29) {
             // Keep edge "back" swipes from stealing drags that start on our handles.
-            for (handle in listOf(dragHandle, resizeLeft, resizeRight)) {
+            for (handle in listOf(dragHandle, resizeLeft, resizeRight, resizeBottom)) {
                 handle.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
                     v.systemGestureExclusionRects = listOf(Rect(0, 0, v.width, v.height))
                 }
             }
         }
         updateMuteUi()
+        applyToolbarMode()
         updateLockUi()
         applyWindowLayout()
         wm.addView(root, params)
         rootAdded = true
+        playEnter()
         applyMuteToWebView(webView)
         webView.loadUrl(initialUrl?.let { Prefs.toUrl(it) } ?: prefs.lastUrl ?: prefs.homeUrl)
     }
@@ -212,14 +247,40 @@ class FloatingWindow(
     }
 
     fun minimize() {
-        if (isMinimized) return
+        if (isMinimized || minimizing) return
         stopTyping()
         activeDialog?.dismiss()
+        if (!rootAdded) {
+            finishMinimize()
+            return
+        }
+        minimizing = true
+        card.animate().cancel()
+        card.animate()
+            .alpha(0f)
+            .scaleX(ANIM_SCALE)
+            .scaleY(ANIM_SCALE)
+            .setDuration(ANIM_OUT_MS)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction {
+                if (minimizing) {
+                    minimizing = false
+                    finishMinimize()
+                }
+            }
+            .start()
+    }
+
+    private fun finishMinimize() {
         // Keep the page laid out at full size so it keeps running (and playing audio) while hidden.
         webHolder.freeze()
         isMinimized = true
         applyWindowLayout()
         showBubble()
+        // The window is now 1x1 and invisible; put the card back to normal for the next restore.
+        card.alpha = 1f
+        card.scaleX = 1f
+        card.scaleY = 1f
         listener.onMinimizedChanged(true)
     }
 
@@ -229,11 +290,42 @@ class FloatingWindow(
         hideBubble()
         webHolder.unfreeze()
         applyWindowLayout()
+        playEnter()
         listener.onMinimizedChanged(false)
     }
 
-    /** Settings changed elsewhere (e.g. opacity on the settings screen): redraw with them. */
+    /** Fades the window out and then calls [onDone] (used before the service stops itself). */
+    fun animateOut(onDone: () -> Unit) {
+        if (!rootAdded || isMinimized) {
+            onDone()
+            return
+        }
+        stopTyping()
+        activeDialog?.dismiss()
+        var done = false
+        val finish = {
+            if (!done) {
+                done = true
+                onDone()
+            }
+        }
+        card.animate().cancel()
+        card.animate()
+            .alpha(0f)
+            .scaleX(ANIM_SCALE)
+            .scaleY(ANIM_SCALE)
+            .setDuration(ANIM_OUT_MS)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction { finish() }
+            .start()
+        // If the animation is ever cancelled, still close.
+        main.postDelayed({ finish() }, ANIM_OUT_MS + 250L)
+    }
+
+    /** Settings changed elsewhere (appearance, opacity on the settings screen): redraw with them. */
     fun refreshAppearance() {
+        applyStyle()
+        applyToolbarMode()
         applyWindowLayout()
     }
 
@@ -255,7 +347,12 @@ class FloatingWindow(
 
     fun destroy() {
         main.removeCallbacks(exitWhenVideoGone)
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        layoutScheduled = false
+        minimizing = false
+        card.animate().cancel()
         activeDialog?.dismiss()
+        saveBounds()
         hideBubble()
         if (rootAdded) {
             wm.removeView(root)
@@ -265,6 +362,123 @@ class FloatingWindow(
         webView.stopLoading()
         webView.destroy()
         CookieManager.getInstance().flush()
+    }
+
+    // endregion
+
+    // region Appearance
+
+    /** The colours for the current theme (dark / AMOLED) and style (solid / glass). */
+    private class Look(val fill: Int, val barTop: Int, val barBottom: Int, val url: Int, val stroke: Int)
+
+    private fun look(): Look = when {
+        prefs.glass && prefs.amoled ->
+            Look(0xB0000000.toInt(), 0x2EFFFFFF, 0x0DFFFFFF, 0x24FFFFFF, 0x4DFFFFFF)
+        prefs.glass ->
+            Look(0xB31E1F24.toInt(), 0x40FFFFFF, 0x14FFFFFF, 0x2EFFFFFF, 0x66FFFFFF)
+        prefs.amoled ->
+            Look(0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF1A1A1A.toInt(), 0xFF2E2E2E.toInt())
+        else -> {
+            val bar = ctx.getColor(R.color.bar)
+            Look(ctx.getColor(R.color.window), bar, bar, ctx.getColor(R.color.url_bg), ctx.getColor(R.color.window_stroke))
+        }
+    }
+
+    private fun cornerPx(): Int = if (prefs.roundedCorners) dp(prefs.cornerRadiusDp) else 0
+
+    private fun borderPx(): Int = dp(prefs.borderDp)
+
+    /** Transparent margin around the card that the drop shadow is drawn into; 0 with no shadow. */
+    private fun shadowPad(): Int = if (prefs.shadow > 0) dpf(2f + 18f * prefs.shadow / 100f) else 0
+
+    /** Everything between the window edge and the page on each side: shadow room plus border. */
+    private fun framePad(): Int = shadowPad() + borderPx()
+
+    /** Applies radius, border, shadow, theme and glass to the live views. Cheap enough to call on every slider tick. */
+    private fun applyStyle() {
+        val look = look()
+        val r = cornerPx()
+        val bw = borderPx()
+        val sp = shadowPad()
+
+        if (root.paddingLeft != sp) root.setPadding(sp, sp, sp, sp)
+        if (card.paddingLeft != bw) card.setPadding(bw, bw, bw, bw)
+
+        card.background = ColorDrawable(look.fill)
+        card.foreground = borderDrawable(look, r)
+        card.elevation = if (prefs.shadow > 0) dpf(1f + 13f * prefs.shadow / 100f).toFloat() else 0f
+        card.invalidateOutline()
+
+        toolbar.background = if (prefs.glass) {
+            GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(look.barTop, look.barBottom))
+        } else {
+            ColorDrawable(look.barTop)
+        }
+        urlField.background = GradientDrawable().apply {
+            setColor(look.url)
+            cornerRadius = dp(if (prefs.compactBar) 12 else 15).toFloat()
+        }
+
+        // Keep the corner handles inside the curve instead of letting it cut them off.
+        val inset = (r * 0.29f).roundToInt()
+        placeHandle(resizeLeft, inset, left = true)
+        placeHandle(resizeRight, inset, left = false)
+    }
+
+    private fun placeHandle(handle: View, inset: Int, left: Boolean) {
+        val lp = handle.layoutParams as FrameLayout.LayoutParams
+        if (lp.bottomMargin == inset && (if (left) lp.leftMargin else lp.rightMargin) == inset) return
+        lp.bottomMargin = inset
+        if (left) lp.leftMargin = inset else lp.rightMargin = inset
+        handle.layoutParams = lp
+    }
+
+    /** The window border, drawn on top of the page so the page can't cover it at the rounded corners. */
+    private fun borderDrawable(look: Look, radius: Int): Drawable? {
+        // Locked windows get an orange outline of at least 2dp so the state is always visible.
+        val width = if (locked) max(borderPx(), dp(2)) else borderPx()
+        if (width <= 0) return null
+        return GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            cornerRadius = radius.toFloat()
+            setStroke(width, if (locked) ctx.getColor(R.color.accent) else look.stroke)
+        }
+    }
+
+    private fun updateHandles() {
+        val show = !(locked || videoMaximized)
+        val corners = if (show) View.VISIBLE else View.GONE
+        resizeLeft.visibility = corners
+        resizeRight.visibility = corners
+        // The edge handle only changes height, which would break the video's fixed shape.
+        resizeBottom.visibility = if (show && !videoMode) View.VISIBLE else View.GONE
+    }
+
+    /** Smooth appearance: fade and grow in. Used when the window opens and when it's restored. */
+    private fun playEnter() {
+        card.animate().cancel()
+        card.alpha = 0f
+        card.scaleX = ANIM_SCALE
+        card.scaleY = ANIM_SCALE
+        card.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(ANIM_IN_MS)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    /** Raises the window slightly while it's being moved or resized (only visible when it has a shadow). */
+    private fun lift(up: Boolean) {
+        if (prefs.shadow <= 0) return
+        card.animate().translationZ(if (up) dp(8).toFloat() else 0f).setDuration(LIFT_MS).start()
+    }
+
+    private fun scheduleLayout() {
+        if (layoutScheduled) return
+        layoutScheduled = true
+        Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
     // endregion
@@ -387,7 +601,25 @@ class FloatingWindow(
             params.flags = (params.flags or focusFlag) and outsideFlag.inv()
             params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
         }
+        applyBlur()
         if (rootAdded) wm.updateViewLayout(root, params)
+    }
+
+    /**
+     * Optional blur of whatever is behind the window (Android 12+, and only when the device allows
+     * cross-window blur). Android blurs the window's rectangle, not its rounded shape.
+     */
+    private fun applyBlur() {
+        if (Build.VERSION.SDK_INT < 31) return
+        @Suppress("DEPRECATION")
+        val blurFlag = WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+        if (prefs.blurBehind && !isMinimized && wm.isCrossWindowBlurEnabled) {
+            params.flags = params.flags or blurFlag
+            params.blurBehindRadius = dp(BLUR_DP)
+        } else {
+            params.flags = params.flags and blurFlag.inv()
+            params.blurBehindRadius = 0
+        }
     }
 
     private fun moveListener() = object : View.OnTouchListener {
@@ -405,11 +637,12 @@ class FloatingWindow(
                     downY = e.rawY
                     startX = bounds.left
                     startY = bounds.top
+                    lift(true)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     bounds.offsetTo(startX + (e.rawX - downX).roundToInt(), startY + (e.rawY - downY).roundToInt())
                     clampBounds()
-                    applyWindowLayout()
+                    scheduleLayout()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endInteraction()
             }
@@ -417,7 +650,9 @@ class FloatingWindow(
         }
     }
 
-    private fun resizeListener(fromLeft: Boolean) = object : View.OnTouchListener {
+    private enum class Handle { LEFT, RIGHT, BOTTOM }
+
+    private fun resizeListener(handle: Handle) = object : View.OnTouchListener {
         private var downX = 0f
         private var downY = 0f
         private val start = Rect()
@@ -430,24 +665,30 @@ class FloatingWindow(
                     downX = e.rawX
                     downY = e.rawY
                     start.set(bounds)
+                    lift(true)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val s = screen()
                     val dx = (e.rawX - downX).roundToInt()
                     val dy = (e.rawY - downY).roundToInt()
                     if (videoMode && fitAspect > 0f) {
-                        resizeVideo(start, dx, dy, fromLeft)
+                        // Video keeps its shape, so only the corners resize it.
+                        if (handle != Handle.BOTTOM) resizeVideo(start, dx, dy, handle == Handle.LEFT)
                         return true
                     }
                     val bottom = (start.bottom + dy).clamp(start.top + minHeight, s.height())
-                    if (fromLeft) {
-                        val left = (start.left + dx).clamp(0, start.right - minWidth)
-                        bounds.set(left, start.top, start.right, bottom)
-                    } else {
-                        val right = (start.right + dx).clamp(start.left + minWidth, s.width())
-                        bounds.set(start.left, start.top, right, bottom)
+                    when (handle) {
+                        Handle.LEFT -> {
+                            val left = (start.left + dx).clamp(0, start.right - minWidth)
+                            bounds.set(left, start.top, start.right, bottom)
+                        }
+                        Handle.RIGHT -> {
+                            val right = (start.right + dx).clamp(start.left + minWidth, s.width())
+                            bounds.set(start.left, start.top, right, bottom)
+                        }
+                        Handle.BOTTOM -> bounds.set(start.left, start.top, start.right, bottom)
                     }
-                    applyWindowLayout()
+                    scheduleLayout()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endInteraction()
             }
@@ -457,7 +698,12 @@ class FloatingWindow(
 
     private fun endInteraction() {
         interacting = false
+        // Land the final position at once rather than waiting for the next frame.
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        layoutScheduled = false
+        applyWindowLayout()
         saveBounds()
+        lift(false)
         // Give the last move a moment to land before checking it against the system bars.
         main.postDelayed({ avoidSystemBars() }, 150)
     }
@@ -723,11 +969,10 @@ class FloatingWindow(
     private fun updateLockUi() {
         btnLock.setImageResource(if (locked) R.drawable.ic_lock else R.drawable.ic_lock_open)
         btnLock.imageTintList = ColorStateList.valueOf(ctx.getColor(if (locked) R.color.accent else R.color.text))
-        root.setBackgroundResource(if (locked) R.drawable.bg_window_locked else R.drawable.bg_window)
+        // The locked state shows as an orange border, which applyStyle draws.
+        applyStyle()
         dragHandle.alpha = if (locked) 0.3f else 1f
-        val handles = if (locked || videoMaximized) View.GONE else View.VISIBLE
-        resizeLeft.visibility = handles
-        resizeRight.visibility = handles
+        updateHandles()
     }
 
     private fun showMenu() {
@@ -1396,15 +1641,19 @@ class FloatingWindow(
         } else {
             bounds.set(start.left, start.top, start.left + w, start.top + h)
         }
-        applyWindowLayout()
+        scheduleLayout()
     }
 
-    /** Video mode gets a slim bar with just the window controls; the page's own UI is hidden anyway. */
+    /**
+     * Video mode, and the optional compact toolbar, use a slim bar. In video mode the page's own UI is
+     * hidden anyway, so only the window controls stay.
+     */
     private fun applyToolbarMode() {
+        val compact = videoMode || prefs.compactBar
         toolbar.layoutParams = toolbar.layoutParams.apply { height = toolbarHeight() }
-        dragHandle.layoutParams = dragHandle.layoutParams.apply { width = dp(if (videoMode) COMPACT_GRIP_DP else 28) }
-        val size = dp(if (videoMode) COMPACT_BUTTON_DP else 34)
-        val pad = dp(if (videoMode) 5 else 7)
+        dragHandle.layoutParams = dragHandle.layoutParams.apply { width = dp(if (compact) COMPACT_GRIP_DP else 28) }
+        val size = dp(if (compact) COMPACT_BUTTON_DP else 34)
+        val pad = dp(if (compact) 5 else 7)
         for (b in listOf(btnBack, btnReload, btnFit, btnMenu, btnMute, btnLock, btnMinimize, btnClose)) {
             b.layoutParams = b.layoutParams.apply {
                 width = size
@@ -1412,10 +1661,12 @@ class FloatingWindow(
             }
             b.setPadding(pad, pad, pad, pad)
         }
+        urlField.layoutParams = urlField.layoutParams.apply { height = dp(if (prefs.compactBar) 24 else 30) }
         urlField.visibility = if (videoMode) View.GONE else View.VISIBLE
         barSpacer.visibility = if (videoMode) View.VISIBLE else View.GONE
         progress.visibility = if (videoMode) View.GONE else View.INVISIBLE
         updateFitButton()
+        updateHandles()
         fitToolbar()
     }
 
@@ -1429,12 +1680,18 @@ class FloatingWindow(
         btnFit.contentDescription = ctx.getString(if (videoMode) R.string.exit_video else R.string.fit_video)
     }
 
-    private fun toolbarHeight() = dp(if (videoMode) COMPACT_BUTTON_DP + 2 else 40)
+    private fun toolbarHeight() = dp(
+        when {
+            videoMode -> COMPACT_BUTTON_DP + 2
+            prefs.compactBar -> COMPACT_BAR_DP
+            else -> 40
+        },
+    )
 
-    /** Everything in the window that isn't page: the bar, the progress line and the 1dp border. */
-    private fun chromeHeight() = toolbarHeight() + (if (videoMode) 0 else dp(2)) + root.paddingTop + root.paddingBottom
+    /** Everything in the window that isn't page: the bar, the progress line, the border and any shadow room. */
+    private fun chromeHeight() = toolbarHeight() + (if (videoMode) 0 else dp(2)) + framePad() * 2
 
-    private fun chromeWidth() = root.paddingLeft + root.paddingRight
+    private fun chromeWidth() = framePad() * 2
 
     private fun contentArea(r: Rect) =
         (r.width() - chromeWidth()).coerceAtLeast(1).toFloat() * (r.height() - chromeHeight()).coerceAtLeast(1)
@@ -1741,6 +1998,12 @@ class FloatingWindow(
         const val VIDEO_GONE_GRACE_MS = 3000L
         const val COMPACT_GRIP_DP = 22
         const val COMPACT_BUTTON_DP = 28
+        const val COMPACT_BAR_DP = 34
+        const val BLUR_DP = 24
+        const val ANIM_IN_MS = 200L
+        const val ANIM_OUT_MS = 140L
+        const val LIFT_MS = 120L
+        const val ANIM_SCALE = 0.94f
     }
 
     /** How video mode was switched on, which decides what switches it off again. */
