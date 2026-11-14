@@ -138,7 +138,7 @@ class Prefs(context: Context) {
 
     fun clearHistory() = sp.edit().remove("history").apply()
 
-    /** brave, google, duckduckgo or custom */
+    /** Built-in search providers plus a user-defined URL template. */
     var searchEngine: String
         get() = sp.getString("search_engine", SEARCH_BRAVE) ?: SEARCH_BRAVE
         set(v) = sp.edit().putString("search_engine", v).apply()
@@ -151,6 +151,8 @@ class Prefs(context: Context) {
         const val SEARCH_BRAVE = "Brave Search"
         const val SEARCH_GOOGLE = "Google"
         const val SEARCH_DDG = "DuckDuckGo"
+        const val SEARCH_BING = "Bing"
+        const val SEARCH_STARTPAGE = "Startpage"
         const val SEARCH_CUSTOM = "Custom"
         const val DEFAULT_CUSTOM_SEARCH = "https://www.google.com/search?q={query}"
 
@@ -174,6 +176,8 @@ class Prefs(context: Context) {
                     val template = when (engine) {
                         SEARCH_GOOGLE -> "https://www.google.com/search?q={query}"
                         SEARCH_DDG -> "https://duckduckgo.com/?q={query}"
+                        SEARCH_BING -> "https://www.bing.com/search?q={query}"
+                        SEARCH_STARTPAGE -> "https://www.startpage.com/sp/search?query={query}"
                         SEARCH_CUSTOM -> customTemplate.takeIf { it.contains("{query}") }
                             ?: DEFAULT_CUSTOM_SEARCH
                         else -> "https://search.brave.com/search?q={query}"
