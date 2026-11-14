@@ -42,6 +42,11 @@
     <string name="menu_find_page">Find in page</string>
     <string name="menu_copy_link">Copy page link</string>
     <string name="menu_share_page">Share page</string>
+    <string name="menu_history">Browsing history</string>
+    <string name="no_history">No browsing history yet</string>
+    <string name="clear_history">Clear history</string>
+    <string name="clear_history_confirm">Clear all saved browsing history?</string>
+    <string name="history_cleared">Browsing history cleared</string>
     <string name="bookmark_saved">Bookmark saved</string>
     <string name="bookmark_removed">Bookmark removed</string>
     <string name="no_bookmarks">No bookmarks saved yet</string>
