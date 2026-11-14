@@ -102,6 +102,42 @@ class Prefs(context: Context) {
         sp.edit().putString("bookmarks", array.toString()).apply()
     }
 
+    /** Recent non-private browsing history, newest first. */
+    fun history(): List<Pair<String, String>> {
+        val raw = sp.getString("history", "[]") ?: "[]"
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { i ->
+                val item = array.optJSONObject(i) ?: return@mapNotNull null
+                val url = item.optString("url").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                item.optString("title", url) to url
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addHistory(title: String, url: String) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        val items = history().filterNot { it.second == url }.toMutableList()
+        items.add(0, title.ifBlank { url } to url)
+        val array = JSONArray()
+        items.take(300).forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("history", array.toString()).apply()
+    }
+
+    fun removeHistory(url: String) {
+        val array = JSONArray()
+        history().filterNot { it.second == url }.forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("history", array.toString()).apply()
+    }
+
+    fun clearHistory() = sp.edit().remove("history").apply()
+
     /** brave, google, duckduckgo or custom */
     var searchEngine: String
         get() = sp.getString("search_engine", SEARCH_BRAVE) ?: SEARCH_BRAVE
