@@ -81,7 +81,7 @@ class Prefs(context: Context) {
         const val SEARCH_GOOGLE = "Google"
         const val SEARCH_DDG = "DuckDuckGo"
         const val SEARCH_CUSTOM = "Custom"
-        const val DEFAULT_CUSTOM_SEARCH = "https://example.com/search?q={query}"
+        const val DEFAULT_CUSTOM_SEARCH = "https://www.google.com/search?q={query}"
 
         const val MIN_OPACITY = 0.1f
 
