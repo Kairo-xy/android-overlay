@@ -45,6 +45,11 @@
     <string name="menu_copy_link">Copy page link</string>
     <string name="menu_share_page">Share page</string>
     <string name="menu_history">Browsing history</string>
+    <string name="menu_privacy">Privacy centre</string>
+    <string name="allow_third_party_cookies">Allow third-party cookies</string>
+    <string name="clear_browsing_data">Clear browsing data…</string>
+    <string name="clear_browsing_data_confirm">Clear cached files, cookies, site storage, form data and saved browsing history on this device?</string>
+    <string name="browsing_data_cleared">Browsing data cleared</string>
     <string name="no_history">No browsing history yet</string>
     <string name="clear_history">Clear history</string>
     <string name="clear_history_confirm">Clear all saved browsing history?</string>
