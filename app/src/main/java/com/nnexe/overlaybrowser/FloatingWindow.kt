@@ -845,7 +845,7 @@ class FloatingWindow(
             Toast.makeText(ctx, R.string.no_bookmarks, Toast.LENGTH_SHORT).show()
             return
         }
-        val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
+        val labels = items.map { (title, url) -> "$title\n$url" }.toTypedArray()
         AlertDialog.Builder(ctx)
             .setTitle(R.string.menu_bookmarks)
             .setItems(labels) { _, which -> webView.loadUrl(items[which].second) }
