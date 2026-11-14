@@ -892,7 +892,20 @@ class FloatingWindow(
         val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
         AlertDialog.Builder(ctx)
             .setTitle(R.string.menu_history)
-            .setItems(labels) { _, which -> webView.loadUrl(items[which].second) }
+            .setItems(labels) { _, which ->
+                val selected = items[which]
+                AlertDialog.Builder(ctx)
+                    .setTitle(selected.first)
+                    .setItems(arrayOf(ctx.getString(R.string.history_open), ctx.getString(R.string.history_remove))) { _, action ->
+                        if (action == 0) webView.loadUrl(selected.second)
+                        else {
+                            prefs.removeHistory(selected.second)
+                            Toast.makeText(ctx, R.string.history_removed, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .show()
+                    .also { activeDialog = it }
+            }
             .setNeutralButton(R.string.clear_history) { _, _ ->
                 AlertDialog.Builder(ctx)
                     .setMessage(R.string.clear_history_confirm)
