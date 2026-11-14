@@ -49,6 +49,9 @@
     <string name="clear_history">Clear history</string>
     <string name="clear_history_confirm">Clear all saved browsing history?</string>
     <string name="history_cleared">Browsing history cleared</string>
+    <string name="history_open">Open page</string>
+    <string name="history_remove">Remove from history</string>
+    <string name="history_removed">History item removed</string>
     <string name="bookmark_saved">Bookmark saved</string>
     <string name="bookmark_removed">Bookmark removed</string>
     <string name="no_bookmarks">No bookmarks saved yet</string>
