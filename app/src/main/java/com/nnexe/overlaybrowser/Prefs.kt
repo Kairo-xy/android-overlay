@@ -8,6 +8,7 @@ import org.json.JSONObject
 /** Everything the floating window remembers between launches. Sizes and positions are in pixels. */
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("overlay", Context.MODE_PRIVATE)
+    private val engines = SearchEngineManager(context)
 
     var x: Int
         get() = sp.getInt("x", -1)
@@ -102,25 +103,37 @@ class Prefs(context: Context) {
         sp.edit().putString("bookmarks", array.toString()).apply()
     }
 
-    /** brave, google, duckduckgo or custom */
+    /**
+     * Id of the default search engine ("Brave Search", "Google", ... or a custom engine's id).
+     * Backed by [SearchEngineManager]; kept here so existing callers keep working.
+     */
     var searchEngine: String
-        get() = sp.getString("search_engine", SEARCH_BRAVE) ?: SEARCH_BRAVE
-        set(v) = sp.edit().putString("search_engine", v).apply()
+        get() = engines.default().id
+        set(v) {
+            engines.defaultId = v
+        }
+
+    /** Search URL template of the default engine. Writing it updates the legacy "Custom" engine. */
     var customSearchUrl: String
-        get() = sp.getString("custom_search_url", DEFAULT_CUSTOM_SEARCH) ?: DEFAULT_CUSTOM_SEARCH
-        set(v) = sp.edit().putString("custom_search_url", v).apply()
+        get() = engines.default().template
+        set(v) = engines.setLegacyCustom(v)
 
     companion object {
         const val DEFAULT_HOME = "https://search.brave.com/"
-        const val SEARCH_BRAVE = "Brave Search"
-        const val SEARCH_GOOGLE = "Google"
-        const val SEARCH_DDG = "DuckDuckGo"
+        const val SEARCH_BRAVE = SearchEngineCatalog.ID_BRAVE
+        const val SEARCH_GOOGLE = SearchEngineCatalog.ID_GOOGLE
+        const val SEARCH_DDG = SearchEngineCatalog.ID_DDG
+        const val SEARCH_BING = SearchEngineCatalog.ID_BING
+        const val SEARCH_STARTPAGE = SearchEngineCatalog.ID_STARTPAGE
         const val SEARCH_CUSTOM = "Custom"
         const val DEFAULT_CUSTOM_SEARCH = "https://www.google.com/search?q={query}"
 
         const val MIN_OPACITY = 0.1f
 
-        /** Converts typed text to a URL using the selected search provider. */
+        /**
+         * Converts typed text to a URL using the selected search provider.
+         * [engine] is a built-in id; for any other id the [customTemplate] is used.
+         */
         fun toUrl(
             input: String,
             engine: String = SEARCH_BRAVE,
@@ -135,14 +148,10 @@ class Prefs(context: Context) {
                 !t.contains(' ') && t.contains('.') && !t.endsWith('.') -> "https://$t"
                 else -> {
                     val encoded = Uri.encode(t)
-                    val template = when (engine) {
-                        SEARCH_GOOGLE -> "https://www.google.com/search?q={query}"
-                        SEARCH_DDG -> "https://duckduckgo.com/?q={query}"
-                        SEARCH_CUSTOM -> customTemplate.takeIf { it.contains("{query}") }
-                            ?: DEFAULT_CUSTOM_SEARCH
-                        else -> "https://search.brave.com/search?q={query}"
-                    }
-                    template.replace("{query}", encoded)
+                    val template = SearchEngineCatalog.builtinTemplate(engine)
+                        ?: customTemplate.takeIf { SearchEngineCatalog.isValidTemplate(it) }
+                        ?: SearchEngineCatalog.BUILTIN.first().template
+                    template.replace(SearchEngineCatalog.PLACEHOLDER, encoded)
                 }
             }
         }

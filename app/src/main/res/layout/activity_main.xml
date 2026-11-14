@@ -105,25 +105,12 @@
                 android:background="@drawable/bg_url"
                 android:paddingHorizontal="12dp" />
 
-            <EditText
-                android:id="@+id/custom_search_url"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:hint="@string/custom_search_hint"
-                android:inputType="textUri"
-                android:singleLine="true"
-                android:textColor="@color/text"
-                android:textColorHint="@color/text_dim"
-                android:visibility="gone" />
-
             <Button
-                android:id="@+id/btn_save_search"
+                android:id="@+id/btn_manage_search"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="@string/save_search"
-                android:visibility="gone" />
+                android:text="@string/se_manage" />
         </LinearLayout>
 
         <LinearLayout style="@style/Card">
