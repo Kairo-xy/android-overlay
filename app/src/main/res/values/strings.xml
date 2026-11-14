@@ -8,6 +8,8 @@
         <item>Brave Search</item>
         <item>Google</item>
         <item>DuckDuckGo</item>
+        <item>Bing</item>
+        <item>Startpage</item>
         <item>Custom</item>
     </string-array>
     <string name="app_version">VERSION 1.1 • FLOATING WEBVIEW</string>
