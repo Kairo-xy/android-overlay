@@ -50,7 +50,6 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("auto_fit_video", true)
         set(v) = sp.edit().putBoolean("auto_fit_video", v).apply()
 
-    /** Where the window sits in video mode, and how much screen the video gets (content area, px²). */
     var videoX: Int
         get() = sp.getInt("vx", -1)
         set(v) = sp.edit().putInt("vx", v).apply()
@@ -68,14 +67,30 @@ class Prefs(context: Context) {
         get() = sp.getString("last", null)
         set(v) = sp.edit().putString("last", v).apply()
 
+    /** brave, google, duckduckgo or custom */
+    var searchEngine: String
+        get() = sp.getString("search_engine", SEARCH_BRAVE) ?: SEARCH_BRAVE
+        set(v) = sp.edit().putString("search_engine", v).apply()
+    var customSearchUrl: String
+        get() = sp.getString("custom_search_url", DEFAULT_CUSTOM_SEARCH) ?: DEFAULT_CUSTOM_SEARCH
+        set(v) = sp.edit().putString("custom_search_url", v).apply()
+
     companion object {
         const val DEFAULT_HOME = "https://search.brave.com/"
+        const val SEARCH_BRAVE = "Brave Search"
+        const val SEARCH_GOOGLE = "Google"
+        const val SEARCH_DDG = "DuckDuckGo"
+        const val SEARCH_CUSTOM = "Custom"
+        const val DEFAULT_CUSTOM_SEARCH = "https://example.com/search?q={query}"
 
-        /** Below this the window is too faint to find again. */
         const val MIN_OPACITY = 0.1f
 
-        /** Turns whatever was typed into the address bar into a URL, using Brave Search for plain text. */
-        fun toUrl(input: String): String? {
+        /** Converts typed text to a URL using the selected search provider. */
+        fun toUrl(
+            input: String,
+            engine: String = SEARCH_BRAVE,
+            customTemplate: String = DEFAULT_CUSTOM_SEARCH,
+        ): String? {
             val t = input.trim()
             if (t.isEmpty()) return null
             val lower = t.lowercase()
@@ -83,7 +98,17 @@ class Prefs(context: Context) {
                 lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("about:") -> t
                 lower.startsWith("localhost") -> "http://$t"
                 !t.contains(' ') && t.contains('.') && !t.endsWith('.') -> "https://$t"
-                else -> "https://search.brave.com/search?q=" + Uri.encode(t)
+                else -> {
+                    val encoded = Uri.encode(t)
+                    val template = when (engine) {
+                        SEARCH_GOOGLE -> "https://www.google.com/search?q={query}"
+                        SEARCH_DDG -> "https://duckduckgo.com/?q={query}"
+                        SEARCH_CUSTOM -> customTemplate.takeIf { it.contains("{query}") }
+                            ?: DEFAULT_CUSTOM_SEARCH
+                        else -> "https://search.brave.com/search?q={query}"
+                    }
+                    template.replace("{query}", encoded)
+                }
             }
         }
     }
