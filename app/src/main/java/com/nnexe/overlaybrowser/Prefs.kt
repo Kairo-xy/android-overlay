@@ -2,6 +2,8 @@ package com.nnexe.overlaybrowser
 
 import android.content.Context
 import android.net.Uri
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Everything the floating window remembers between launches. Sizes and positions are in pixels. */
 class Prefs(context: Context) {
@@ -66,6 +68,39 @@ class Prefs(context: Context) {
     var lastUrl: String?
         get() = sp.getString("last", null)
         set(v) = sp.edit().putString("last", v).apply()
+
+    /** Saved pages stored locally on this device. */
+    fun bookmarks(): List<Pair<String, String>> {
+        val raw = sp.getString("bookmarks", "[]") ?: "[]"
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { i ->
+                val item = array.optJSONObject(i) ?: return@mapNotNull null
+                val url = item.optString("url").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                item.optString("title", url) to url
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addBookmark(title: String, url: String) {
+        val items = bookmarks().filterNot { it.second == url }.toMutableList()
+        items.add(0, title.ifBlank { url } to url)
+        val array = JSONArray()
+        items.take(200).forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("bookmarks", array.toString()).apply()
+    }
+
+    fun removeBookmark(url: String) {
+        val array = JSONArray()
+        bookmarks().filterNot { it.second == url }.forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("bookmarks", array.toString()).apply()
+    }
 
     /** brave, google, duckduckgo or custom */
     var searchEngine: String
