@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -762,7 +764,12 @@ class FloatingWindow(
         }
         menu.add(0, MENU_SET_HOME, 10, R.string.menu_set_home)
         menu.add(0, MENU_WINDOW_FULLSCREEN, 11, if (fullWindowMode) R.string.menu_exit_fullscreen else R.string.menu_fullscreen)
-        menu.add(0, MENU_SETTINGS, 12, R.string.menu_settings)
+        menu.add(0, MENU_BOOKMARK, 12, R.string.menu_add_bookmark)
+        menu.add(0, MENU_BOOKMARKS, 13, R.string.menu_bookmarks)
+        menu.add(0, MENU_FIND, 14, R.string.menu_find_page)
+        menu.add(0, MENU_COPY_LINK, 15, R.string.menu_copy_link)
+        menu.add(0, MENU_SHARE, 16, R.string.menu_share_page)
+        menu.add(0, MENU_SETTINGS, 17, R.string.menu_settings)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_FORWARD -> webView.goForward()
@@ -795,6 +802,29 @@ class FloatingWindow(
                     Toast.makeText(ctx, R.string.home_saved, Toast.LENGTH_SHORT).show()
                 }
                 MENU_WINDOW_FULLSCREEN -> toggleWindowFullscreen()
+                MENU_BOOKMARK -> {
+                    val url = pageUrl()
+                    prefs.addBookmark(hostOf(url), url)
+                    Toast.makeText(ctx, R.string.bookmark_saved, Toast.LENGTH_SHORT).show()
+                }
+                MENU_BOOKMARKS -> showBookmarks()
+                MENU_FIND -> showFindInPage()
+                MENU_COPY_LINK -> {
+                    val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Page URL", pageUrl()))
+                    Toast.makeText(ctx, R.string.link_copied, Toast.LENGTH_SHORT).show()
+                }
+                MENU_SHARE -> {
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, pageUrl())
+                    }
+                    try {
+                        ctx.startActivity(Intent.createChooser(share, ctx.getString(R.string.menu_share_page)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (_: Exception) {
+                        Toast.makeText(ctx, R.string.no_app_for_link, Toast.LENGTH_SHORT).show()
+                    }
+                }
                 MENU_SETTINGS -> {
                     minimize()
                     listener.onOpenSettings()
@@ -806,6 +836,75 @@ class FloatingWindow(
     }
 
     private fun pageUrl() = currentUrl.ifEmpty { prefs.homeUrl }
+
+    private fun showBookmarks() {
+        val items = prefs.bookmarks()
+        if (items.isEmpty()) {
+            Toast.makeText(ctx, R.string.no_bookmarks, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.menu_bookmarks)
+            .setItems(labels) { _, which -> webView.loadUrl(items[which].second) }
+            .setNeutralButton(R.string.manage_bookmarks) { _, _ -> showBookmarkManager() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
+    private fun showBookmarkManager() {
+        val items = prefs.bookmarks()
+        if (items.isEmpty()) {
+            Toast.makeText(ctx, R.string.no_bookmarks, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = items.map { it.first }.toTypedArray()
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.manage_bookmarks)
+            .setItems(labels) { _, which ->
+                val selected = items[which]
+                AlertDialog.Builder(ctx)
+                    .setTitle(selected.first)
+                    .setItems(arrayOf(ctx.getString(R.string.open_bookmark), ctx.getString(R.string.remove_bookmark))) { _, action ->
+                        if (action == 0) webView.loadUrl(selected.second)
+                        else {
+                            prefs.removeBookmark(selected.second)
+                            Toast.makeText(ctx, R.string.bookmark_removed, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .show()
+                    .also { activeDialog = it }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
+    private fun showFindInPage() {
+        val field = EditText(ctx).apply {
+            hint = ctx.getString(R.string.find_hint)
+            singleLine = true
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.menu_find_page)
+            .setView(field)
+            .setPositiveButton(R.string.find_next) { _, _ ->
+                val query = field.text.toString().trim()
+                if (query.isNotEmpty()) {
+                    webView.findAllAsync(query)
+                    webView.setFindListener { active, _, done ->
+                        if (done) Toast.makeText(ctx, ctx.getString(R.string.find_matches, active), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNeutralButton(R.string.clear_find) { _, _ -> webView.clearMatches() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
 
     /** Expands the overlay to the full display and restores its previous floating bounds on exit. */
     private fun toggleWindowFullscreen() {
@@ -1763,6 +1862,11 @@ class FloatingWindow(
         const val MENU_AUTO_FIT = 11
         const val MENU_BLOCK_ADS = 12
         const val MENU_WINDOW_FULLSCREEN = 13
+        const val MENU_BOOKMARK = 14
+        const val MENU_BOOKMARKS = 15
+        const val MENU_FIND = 16
+        const val MENU_COPY_LINK = 17
+        const val MENU_SHARE = 18
         const val MIN_VIDEO_WIDTH_DP = 120
         const val VIDEO_GONE_GRACE_MS = 3000L
         const val COMPACT_GRIP_DP = 22
