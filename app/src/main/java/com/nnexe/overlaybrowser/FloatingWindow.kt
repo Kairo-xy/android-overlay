@@ -47,6 +47,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebStorage
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -769,7 +770,9 @@ class FloatingWindow(
         menu.add(0, MENU_FIND, 14, R.string.menu_find_page)
         menu.add(0, MENU_COPY_LINK, 15, R.string.menu_copy_link)
         menu.add(0, MENU_SHARE, 16, R.string.menu_share_page)
-        menu.add(0, MENU_SETTINGS, 17, R.string.menu_settings)
+        menu.add(0, MENU_HISTORY, 17, R.string.menu_history)
+        menu.add(0, MENU_PRIVACY, 18, R.string.menu_privacy)
+        menu.add(0, MENU_SETTINGS, 19, R.string.menu_settings)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_FORWARD -> webView.goForward()
@@ -825,6 +828,8 @@ class FloatingWindow(
                         Toast.makeText(ctx, R.string.no_app_for_link, Toast.LENGTH_SHORT).show()
                     }
                 }
+                MENU_HISTORY -> showHistory()
+                MENU_PRIVACY -> showPrivacyCenter()
                 MENU_SETTINGS -> {
                     minimize()
                     listener.onOpenSettings()
@@ -843,7 +848,7 @@ class FloatingWindow(
             Toast.makeText(ctx, R.string.no_bookmarks, Toast.LENGTH_SHORT).show()
             return
         }
-        val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
+        val labels = items.map { (title, url) -> "$title\n$url" }.toTypedArray()
         AlertDialog.Builder(ctx)
             .setTitle(R.string.menu_bookmarks)
             .setItems(labels) { _, which -> webView.loadUrl(items[which].second) }
@@ -873,6 +878,77 @@ class FloatingWindow(
                             Toast.makeText(ctx, R.string.bookmark_removed, Toast.LENGTH_SHORT).show()
                         }
                     }
+                    .show()
+                    .also { activeDialog = it }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
+    private fun showHistory() {
+        val items = prefs.history()
+        if (items.isEmpty()) {
+            Toast.makeText(ctx, R.string.no_history, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.menu_history)
+            .setItems(labels) { _, which ->
+                val selected = items[which]
+                AlertDialog.Builder(ctx)
+                    .setTitle(selected.first)
+                    .setItems(arrayOf(ctx.getString(R.string.history_open), ctx.getString(R.string.history_remove))) { _, action ->
+                        if (action == 0) webView.loadUrl(selected.second)
+                        else {
+                            prefs.removeHistory(selected.second)
+                            Toast.makeText(ctx, R.string.history_removed, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .show()
+                    .also { activeDialog = it }
+            }
+            .setNeutralButton(R.string.clear_history) { _, _ ->
+                AlertDialog.Builder(ctx)
+                    .setMessage(R.string.clear_history_confirm)
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        prefs.clearHistory()
+                        Toast.makeText(ctx, R.string.history_cleared, Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+                    .also { activeDialog = it }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
+    private fun showPrivacyCenter() {
+        val enabled = booleanArrayOf(prefs.allowThirdPartyCookies)
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.menu_privacy)
+            .setMultiChoiceItems(arrayOf(ctx.getString(R.string.allow_third_party_cookies)), enabled) { _, which, checked ->
+                if (which == 0) {
+                    prefs.allowThirdPartyCookies = checked
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, checked)
+                }
+            }
+            .setNeutralButton(R.string.clear_browsing_data) { _, _ ->
+                AlertDialog.Builder(ctx)
+                    .setMessage(R.string.clear_browsing_data_confirm)
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        webView.clearCache(true)
+                        webView.clearHistory()
+                        webView.clearFormData()
+                        CookieManager.getInstance().removeAllCookies(null)
+                        CookieManager.getInstance().flush()
+                        WebStorage.getInstance().deleteAllData()
+                        prefs.clearHistory()
+                        Toast.makeText(ctx, R.string.browsing_data_cleared, Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
                     .show()
                     .also { activeDialog = it }
             }
@@ -1052,7 +1128,7 @@ class FloatingWindow(
             .replace("; wv)", ")")
             .replace(Regex("Version/\\d+(\\.\\d+)* "), "")
         applyUserAgent(this)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, prefs.allowThirdPartyCookies)
         addJavascriptInterface(Bridge(), "__ovlBridge")
         webViewClient = Client()
         webChromeClient = Chrome()
@@ -1210,6 +1286,7 @@ class FloatingWindow(
             }
             currentUrl = url
             prefs.lastUrl = url
+            prefs.addHistory(hostOf(url), url)
             setUrlText(url)
             updateNavButtons()
         }
@@ -1867,6 +1944,8 @@ class FloatingWindow(
         const val MENU_FIND = 16
         const val MENU_COPY_LINK = 17
         const val MENU_SHARE = 18
+        const val MENU_HISTORY = 19
+        const val MENU_PRIVACY = 20
         const val MIN_VIDEO_WIDTH_DP = 120
         const val VIDEO_GONE_GRACE_MS = 3000L
         const val COMPACT_GRIP_DP = 22

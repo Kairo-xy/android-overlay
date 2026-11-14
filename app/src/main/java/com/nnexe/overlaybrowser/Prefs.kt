@@ -41,6 +41,9 @@ class Prefs(context: Context) {
     var opacity: Float
         get() = sp.getFloat("opacity", 1f).coerceIn(MIN_OPACITY, 1f)
         set(v) = sp.edit().putFloat("opacity", v).apply()
+    var allowThirdPartyCookies: Boolean
+        get() = sp.getBoolean("third_party_cookies", false)
+        set(v) = sp.edit().putBoolean("third_party_cookies", v).apply()
     var desktopMode: Boolean
         get() = sp.getBoolean("desktop", false)
         set(v) = sp.edit().putBoolean("desktop", v).apply()
@@ -102,7 +105,43 @@ class Prefs(context: Context) {
         sp.edit().putString("bookmarks", array.toString()).apply()
     }
 
-    /** brave, google, duckduckgo or custom */
+    /** Recent non-private browsing history, newest first. */
+    fun history(): List<Pair<String, String>> {
+        val raw = sp.getString("history", "[]") ?: "[]"
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { i ->
+                val item = array.optJSONObject(i) ?: return@mapNotNull null
+                val url = item.optString("url").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                item.optString("title", url) to url
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addHistory(title: String, url: String) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        val items = history().filterNot { it.second == url }.toMutableList()
+        items.add(0, title.ifBlank { url } to url)
+        val array = JSONArray()
+        items.take(300).forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("history", array.toString()).apply()
+    }
+
+    fun removeHistory(url: String) {
+        val array = JSONArray()
+        history().filterNot { it.second == url }.forEach { (name, link) ->
+            array.put(JSONObject().put("title", name).put("url", link))
+        }
+        sp.edit().putString("history", array.toString()).apply()
+    }
+
+    fun clearHistory() = sp.edit().remove("history").apply()
+
+    /** Built-in search providers plus a user-defined URL template. */
     var searchEngine: String
         get() = sp.getString("search_engine", SEARCH_BRAVE) ?: SEARCH_BRAVE
         set(v) = sp.edit().putString("search_engine", v).apply()
@@ -115,6 +154,8 @@ class Prefs(context: Context) {
         const val SEARCH_BRAVE = "Brave Search"
         const val SEARCH_GOOGLE = "Google"
         const val SEARCH_DDG = "DuckDuckGo"
+        const val SEARCH_BING = "Bing"
+        const val SEARCH_STARTPAGE = "Startpage"
         const val SEARCH_CUSTOM = "Custom"
         const val DEFAULT_CUSTOM_SEARCH = "https://www.google.com/search?q={query}"
 
@@ -138,6 +179,8 @@ class Prefs(context: Context) {
                     val template = when (engine) {
                         SEARCH_GOOGLE -> "https://www.google.com/search?q={query}"
                         SEARCH_DDG -> "https://duckduckgo.com/?q={query}"
+                        SEARCH_BING -> "https://www.bing.com/search?q={query}"
+                        SEARCH_STARTPAGE -> "https://www.startpage.com/sp/search?query={query}"
                         SEARCH_CUSTOM -> customTemplate.takeIf { it.contains("{query}") }
                             ?: DEFAULT_CUSTOM_SEARCH
                         else -> "https://search.brave.com/search?q={query}"
