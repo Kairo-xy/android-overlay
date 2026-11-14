@@ -769,7 +769,8 @@ class FloatingWindow(
         menu.add(0, MENU_FIND, 14, R.string.menu_find_page)
         menu.add(0, MENU_COPY_LINK, 15, R.string.menu_copy_link)
         menu.add(0, MENU_SHARE, 16, R.string.menu_share_page)
-        menu.add(0, MENU_SETTINGS, 17, R.string.menu_settings)
+        menu.add(0, MENU_HISTORY, 17, R.string.menu_history)
+        menu.add(0, MENU_SETTINGS, 18, R.string.menu_settings)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_FORWARD -> webView.goForward()
@@ -825,6 +826,7 @@ class FloatingWindow(
                         Toast.makeText(ctx, R.string.no_app_for_link, Toast.LENGTH_SHORT).show()
                     }
                 }
+                MENU_HISTORY -> showHistory()
                 MENU_SETTINGS -> {
                     minimize()
                     listener.onOpenSettings()
@@ -873,6 +875,32 @@ class FloatingWindow(
                             Toast.makeText(ctx, R.string.bookmark_removed, Toast.LENGTH_SHORT).show()
                         }
                     }
+                    .show()
+                    .also { activeDialog = it }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+            .also { activeDialog = it }
+    }
+
+    private fun showHistory() {
+        val items = prefs.history()
+        if (items.isEmpty()) {
+            Toast.makeText(ctx, R.string.no_history, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = items.map { (title, url) -> "$title\\n$url" }.toTypedArray()
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.menu_history)
+            .setItems(labels) { _, which -> webView.loadUrl(items[which].second) }
+            .setNeutralButton(R.string.clear_history) { _, _ ->
+                AlertDialog.Builder(ctx)
+                    .setMessage(R.string.clear_history_confirm)
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        prefs.clearHistory()
+                        Toast.makeText(ctx, R.string.history_cleared, Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
                     .show()
                     .also { activeDialog = it }
             }
@@ -1210,6 +1238,7 @@ class FloatingWindow(
             }
             currentUrl = url
             prefs.lastUrl = url
+            prefs.addHistory(hostOf(url), url)
             setUrlText(url)
             updateNavButtons()
         }
@@ -1867,6 +1896,7 @@ class FloatingWindow(
         const val MENU_FIND = 16
         const val MENU_COPY_LINK = 17
         const val MENU_SHARE = 18
+        const val MENU_HISTORY = 19
         const val MIN_VIDEO_WIDTH_DP = 120
         const val VIDEO_GONE_GRACE_MS = 3000L
         const val COMPACT_GRIP_DP = 22
